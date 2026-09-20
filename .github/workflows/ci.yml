@@ -1,0 +1,55 @@
+name: ci
+
+# The shape S11 L03 builds on camera, and the one thing that makes it worth building:
+# the push DEPENDS ON the tests. Break a test, and the workflow stops before an image
+# is ever built — not after, and not alongside. A pipeline that tests and pushes in
+# parallel will happily ship the build it just failed.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: go test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - run: go vet ./...
+      - run: go test -v ./...
+
+  image:
+    name: build and push
+    # This line is the lesson. Without it the two jobs race and a red test ships anyway.
+    needs: test
+    # Pull requests build nothing: a fork must never be able to push to the registry.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          # Provided by Actions; never a personal token pasted into a secret.
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          # Tagged by commit SHA, never `latest`. Argo CD Image Updater in S11 L05
+          # needs an immutable tag it can order; `latest` is neither.
+          tags: ghcr.io/${{ github.repository_owner }}/argocd-class-app:${{ github.sha }}
